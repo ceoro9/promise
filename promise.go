@@ -85,18 +85,44 @@ func (promise *Promise) resolve(resolution interface{}) {
 		return
 	}
 
-	for range promise.catch {
-		promise.wg.Done()
-	}
-
+	promise.state = fulfilled
 	promise.result = resolution
+	doneCounter := 0
 
 	for _, value := range promise.then {
 		promise.result = value(promise.result)
+		// check if returned value is promise
+		if thenPromise, ok := promise.result.(*Promise); ok {
+			isRejected := false
+
+			thenPromise.Then(func(result interface{}) interface{} {
+				promise.result = result
+				return nil
+			}).Catch(func(err error) error {
+				chainError := err
+				isRejected = true
+
+				for i := 0; i < len(promise.then)-doneCounter; i++ {
+					promise.wg.Done()
+				}
+				for _, value := range promise.catch {
+					chainError = value(chainError)
+					promise.wg.Done()
+				}
+				return chainError
+			}).Await()
+
+			if isRejected {
+				return
+			}
+		}
 		promise.wg.Done()
+		doneCounter++
 	}
 
-	promise.state = fulfilled
+	for range promise.catch {
+		promise.wg.Done()
+	}
 }
 
 func (promise *Promise) reject(error error) {
